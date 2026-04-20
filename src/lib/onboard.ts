@@ -1778,6 +1778,8 @@ const WEB_SEARCH_PROVIDER_SPECS: Record<WebSearchProvider, WebSearchProviderSpec
         "Accept: application/json",
         "-H",
         `Authorization: Bearer ${apiKey}`,
+        "-H",
+        `X-Client-Source: nemoclaw-onboarding`,
         "-d",
         JSON.stringify({ query: "ping", max_results: 1 }),
         "https://api.tavily.com/search",
