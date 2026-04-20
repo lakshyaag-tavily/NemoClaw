@@ -185,15 +185,32 @@ describe("onboard session", () => {
   it("persists and clears web search config through safe session updates", () => {
     session.saveSession(session.createSession());
     session.markStepComplete("provider_selection", {
-      webSearchConfig: { fetchEnabled: true },
+      webSearchConfig: { fetchEnabled: true, provider: "brave" },
     });
 
     let loaded = requireLoadedSession(session.loadSession());
-    expect(loaded.webSearchConfig).toEqual({ fetchEnabled: true });
+    expect(loaded.webSearchConfig).toEqual({ fetchEnabled: true, provider: "brave" });
 
     session.completeSession({ webSearchConfig: null });
     loaded = requireLoadedSession(session.loadSession());
     expect(loaded.webSearchConfig).toBeNull();
+  });
+
+  it("round-trips Tavily web search provider through persisted sessions", () => {
+    session.saveSession(
+      session.createSession({
+        webSearchConfig: {
+          fetchEnabled: true,
+          provider: "tavily",
+        },
+      }),
+    );
+
+    const loaded = requireLoadedSession(session.loadSession());
+    expect(loaded.webSearchConfig).toEqual({
+      fetchEnabled: true,
+      provider: "tavily",
+    });
   });
 
   it("does not clear existing metadata when updates omit whitelisted metadata fields", () => {
@@ -423,6 +440,20 @@ describe("onboard session", () => {
 
     expect(created.policyPresets).toEqual(["pypi", "npm"]);
     expect(created.messagingChannels).toEqual(["telegram", "discord"]);
+  });
+
+  it("redacts web search API keys from persisted failure messages", () => {
+    session.saveSession(session.createSession());
+    session.markStepFailed(
+      "inference",
+      "validation failed: BRAVE_API_KEY=brv-secret-key TAVILY_API_KEY=tvly-secret-key",
+    );
+
+    const loaded = requireLoadedSession(session.loadSession());
+    expect(loaded.steps.inference.error).toContain("BRAVE_API_KEY=<REDACTED>");
+    expect(loaded.steps.inference.error).toContain("TAVILY_API_KEY=<REDACTED>");
+    expect(loaded.steps.inference.error).not.toContain("brv-secret-key");
+    expect(loaded.steps.inference.error).not.toContain("tvly-secret-key");
   });
 
   it("summarizes the session for debug output", () => {

@@ -119,13 +119,14 @@ describe("tiers", () => {
   });
 
   describe("tier: balanced", () => {
-    it("includes npm, pypi, huggingface, brew, and brave", () => {
+    it("includes npm, pypi, huggingface, brew, brave, and tavily", () => {
       const names = mustGetTier("balanced").presets.map((preset: TierPreset) => preset.name);
       expect(names).toContain("npm");
       expect(names).toContain("pypi");
       expect(names).toContain("huggingface");
       expect(names).toContain("brew");
       expect(names).toContain("brave");
+      expect(names).toContain("tavily");
     });
 
     it("has at least 5 presets", () => {

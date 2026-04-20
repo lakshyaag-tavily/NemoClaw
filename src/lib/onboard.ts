@@ -198,7 +198,7 @@ import type { ProbeRecovery } from "./validation-recovery";
 import type { SandboxCreateFailure, ValidationClassification } from "./validation";
 import type { TierDefinition, TierPreset } from "./tiers";
 import type { StreamSandboxCreateResult } from "./sandbox-create-stream";
-import type { WebSearchConfig } from "./web-search";
+import type { WebSearchConfig, WebSearchProvider } from "./web-search";
 import type {
   ModelCatalogFetchResult,
   ModelValidationResult,
@@ -279,6 +279,7 @@ function verifyGatewayContainerRunning() {
 const OPENCLAW_LAUNCH_AGENT_PLIST = "~/Library/LaunchAgents/ai.openclaw.gateway.plist";
 
 const BRAVE_SEARCH_HELP_URL = "https://brave.com/search/api/";
+const TAVILY_SEARCH_HELP_URL = "https://app.tavily.com/home";
 
 // Re-export shared JSON types under the names used throughout this module.
 // See src/lib/json-types.ts for the canonical definitions.
@@ -1298,36 +1299,82 @@ function isAffirmativeAnswer(value: string | null | undefined): boolean {
   );
 }
 
-function validateBraveSearchApiKey(apiKey: string): CurlProbeResult {
-  return runCurlProbe([
-    "-sS",
-    "--compressed",
-    "-H",
-    "Accept: application/json",
-    "-H",
-    "Accept-Encoding: gzip",
-    "-H",
-    `X-Subscription-Token: ${apiKey}`,
-    "--get",
-    "--data-urlencode",
-    "q=ping",
-    "--data-urlencode",
-    "count=1",
-    "https://api.search.brave.com/res/v1/web/search",
-  ]);
+interface WebSearchProviderSpec {
+  id: WebSearchProvider;
+  label: string;
+  envKey: string;
+  helpUrl: string;
+  validate: (apiKey: string) => CurlProbeResult;
 }
 
-async function promptBraveSearchRecovery(
+const WEB_SEARCH_PROVIDER_SPECS: Record<WebSearchProvider, WebSearchProviderSpec> = {
+  brave: {
+    id: "brave",
+    label: "Brave Search",
+    envKey: webSearch.BRAVE_API_KEY_ENV,
+    helpUrl: BRAVE_SEARCH_HELP_URL,
+    validate: (apiKey: string): CurlProbeResult =>
+      runCurlProbe([
+        "-sS",
+        "--compressed",
+        "-H",
+        "Accept: application/json",
+        "-H",
+        "Accept-Encoding: gzip",
+        "-H",
+        `X-Subscription-Token: ${apiKey}`,
+        "--get",
+        "--data-urlencode",
+        "q=ping",
+        "--data-urlencode",
+        "count=1",
+        "https://api.search.brave.com/res/v1/web/search",
+      ]),
+  },
+  tavily: {
+    id: "tavily",
+    label: "Tavily Search",
+    envKey: webSearch.TAVILY_API_KEY_ENV,
+    helpUrl: TAVILY_SEARCH_HELP_URL,
+    validate: (apiKey: string): CurlProbeResult =>
+      runCurlProbe([
+        "-sS",
+        "--compressed",
+        "-X",
+        "POST",
+        "-H",
+        "Content-Type: application/json",
+        "-H",
+        "Accept: application/json",
+        "-H",
+        `Authorization: Bearer ${apiKey}`,
+        "-d",
+        JSON.stringify({ query: "ping", max_results: 1 }),
+        "https://api.tavily.com/search",
+      ]),
+  },
+};
+
+function getWebSearchProviderSpec(provider: WebSearchProvider): WebSearchProviderSpec {
+  const spec = WEB_SEARCH_PROVIDER_SPECS[provider];
+  if (!spec) {
+    throw new Error(`Unknown web search provider: ${provider}`);
+  }
+  return spec;
+}
+
+async function promptWebSearchProviderRecovery(
   validation: ValidationFailureLike,
+  spec: WebSearchProviderSpec,
 ): Promise<"retry" | "skip"> {
   const recovery = classifyValidationFailure(validation);
 
   if (recovery.kind === "credential") {
-    console.log("  Brave Search rejected that API key.");
+    console.log(`  ${spec.label} rejected that API key.`);
   } else if (recovery.kind === "transport") {
     console.log(getTransportRecoveryMessage(validation));
   } else {
-    console.log("  Brave Search validation did not succeed.");
+    console.log(`  ${spec.label} validation did not succeed.`);
   }
 
   const answer = (await prompt("  Type 'retry', 'skip', or 'exit' [retry]: ")).trim().toLowerCase();
@@ -1338,52 +1385,53 @@ async function promptBraveSearchRecovery(
   return "retry";
 }
 
-async function promptBraveSearchApiKey(): Promise<string> {
+async function promptWebSearchApiKey(spec: WebSearchProviderSpec): Promise<string> {
   console.log("");
-  console.log(`  Get your Brave Search API key from: ${BRAVE_SEARCH_HELP_URL}`);
+  console.log(`  Get your ${spec.label} API key from: ${spec.helpUrl}`);
   console.log("");
 
   while (true) {
     const key = normalizeCredentialValue(
-      await prompt("  Brave Search API key: ", { secret: true }),
+      await prompt(`  ${spec.label} API key: `, { secret: true }),
     );
     if (!key) {
-      console.error("  Brave Search API key is required.");
+      console.error(`  ${spec.label} API key is required.`);
       continue;
     }
     return key;
   }
 }
 
-async function ensureValidatedBraveSearchCredential(
+async function ensureValidatedWebSearchCredential(
+  spec: WebSearchProviderSpec,
   nonInteractive = isNonInteractive(),
 ): Promise<string | null> {
-  const savedApiKey = getCredential(webSearch.BRAVE_API_KEY_ENV);
+  const savedApiKey = getCredential(spec.envKey);
   let apiKey: string | null =
-    savedApiKey || normalizeCredentialValue(process.env[webSearch.BRAVE_API_KEY_ENV]);
+    savedApiKey || normalizeCredentialValue(process.env[spec.envKey]);
   let usingSavedKey = Boolean(savedApiKey);
 
   while (true) {
     if (!apiKey) {
       if (nonInteractive) {
         throw new Error(
-          "Brave Search requires BRAVE_API_KEY or a saved Brave Search credential in non-interactive mode.",
+          `${spec.label} requires ${spec.envKey} or a saved ${spec.label} credential in non-interactive mode.`,
         );
       }
-      apiKey = await promptBraveSearchApiKey();
+      apiKey = await promptWebSearchApiKey(spec);
       usingSavedKey = false;
     }
 
-    const validation = validateBraveSearchApiKey(apiKey);
+    const validation = spec.validate(apiKey);
     if (validation.ok) {
-      saveCredential(webSearch.BRAVE_API_KEY_ENV, apiKey);
-      process.env[webSearch.BRAVE_API_KEY_ENV] = apiKey;
+      saveCredential(spec.envKey, apiKey);
+      process.env[spec.envKey] = apiKey;
       return apiKey;
     }
 
     const prefix = usingSavedKey
-      ? "  Saved Brave Search API key validation failed."
-      : "  Brave Search API key validation failed.";
+      ? `  Saved ${spec.label} API key validation failed.`
+      : `  ${spec.label} API key validation failed.`;
     console.error(prefix);
     if (validation.message) {
       console.error(`  ${validation.message}`);
@@ -1391,13 +1439,12 @@ async function ensureValidatedBraveSearchCredential(
 
     if (nonInteractive) {
       throw new Error(
-        validation.message || "Brave Search API key validation failed in non-interactive mode.",
+        validation.message || `${spec.label} API key validation failed in non-interactive mode.`,
       );
     }
-
-    const action = await promptBraveSearchRecovery(validation);
+    const action = await promptWebSearchProviderRecovery(validation, spec);
     if (action === "skip") {
-      console.log("  Skipping Brave Web Search setup.");
+      console.log(`  Skipping ${spec.label} setup.`);
       console.log("");
       return null;
     }
@@ -1435,6 +1482,38 @@ function agentSupportsWebSearch(
   return false;
 }
 
+async function ensureValidatedBraveSearchCredential(
+  nonInteractive = isNonInteractive(),
+): Promise<string | null> {
+  return ensureValidatedWebSearchCredential(getWebSearchProviderSpec("brave"), nonInteractive);
+}
+
+function resolveNonInteractiveWebSearchProvider(): WebSearchProvider | null {
+  // Brave wins when both keys are present — preserves OpenClaw auto-detect
+  // precedence and avoids silently flipping a user's runtime provider on
+  // upgrade. Tavily is only auto-selected when it's the only key set.
+  const braveKey = normalizeCredentialValue(process.env[webSearch.BRAVE_API_KEY_ENV]);
+  const tavilyKey = normalizeCredentialValue(process.env[webSearch.TAVILY_API_KEY_ENV]);
+  if (braveKey) return "brave";
+  if (tavilyKey) return "tavily";
+  return null;
+}
+
+async function promptWebSearchProvider(): Promise<WebSearchProvider | null> {
+  console.log("");
+  console.log("  Enable web search for your agent?");
+  console.log("    [1] No web search (default)");
+  console.log("    [2] Brave Search");
+  console.log("    [3] Tavily Search");
+  while (true) {
+    const raw = (await prompt("  Choose [1-3]: ")).trim();
+    if (raw === "" || raw === "1" || /^n(o)?$/i.test(raw)) return null;
+    if (raw === "2" || /^brave$/i.test(raw)) return "brave";
+    if (raw === "3" || /^tavily$/i.test(raw)) return "tavily";
+    console.log("  Enter 1, 2, or 3.");
+  }
+}
+
 async function configureWebSearch(
   existingConfig: WebSearchConfig | null = null,
   agent: AgentDefinition | null = null,
@@ -1446,42 +1525,50 @@ async function configureWebSearch(
   }
 
   if (existingConfig) {
-    return { fetchEnabled: true };
+    const provider =
+      existingConfig.provider === "tavily" || existingConfig.provider === "brave"
+        ? existingConfig.provider
+        : "brave";
+    return { fetchEnabled: true, provider };
   }
 
   if (isNonInteractive()) {
-    const braveApiKey = normalizeCredentialValue(process.env[webSearch.BRAVE_API_KEY_ENV]);
-    if (!braveApiKey) {
+    const provider = resolveNonInteractiveWebSearchProvider();
+    if (!provider) {
       return null;
     }
-    note("  [non-interactive] Brave Web Search requested.");
-    const validation = validateBraveSearchApiKey(braveApiKey);
+    const spec = getWebSearchProviderSpec(provider);
+    const apiKey = normalizeCredentialValue(process.env[spec.envKey]);
+    note(`  [non-interactive] ${spec.label} requested.`);
+    const validation = spec.validate(apiKey);
     if (!validation.ok) {
       console.warn(
-        "  Brave Search API key validation failed. Web search will be disabled — re-enable later via `nemoclaw config web-search`.",
+        `  ${spec.label} API key validation failed. Web search will be disabled — re-enable later via \`nemoclaw config web-search\`.`,
       );
       if (validation.message) {
         console.warn(`  ${validation.message}`);
       }
       return null;
     }
-    saveCredential(webSearch.BRAVE_API_KEY_ENV, braveApiKey);
-    process.env[webSearch.BRAVE_API_KEY_ENV] = braveApiKey;
-    return { fetchEnabled: true };
+    saveCredential(spec.envKey, apiKey);
+    process.env[spec.envKey] = apiKey;
+    return { fetchEnabled: true, provider };
   }
-  const enableAnswer = await prompt("  Enable Brave Web Search? [y/N]: ");
-  if (!isAffirmativeAnswer(enableAnswer)) {
+
+  const provider = await promptWebSearchProvider();
+  if (!provider) {
     return null;
   }
 
-  const braveApiKey = await ensureValidatedBraveSearchCredential();
-  if (!braveApiKey) {
+  const spec = getWebSearchProviderSpec(provider);
+  const apiKey = await ensureValidatedWebSearchCredential(spec);
+  if (!apiKey) {
     return null;
   }
 
-  console.log("  ✓ Enabled Brave Web Search");
+  console.log(`  ✓ Enabled ${spec.label}`);
   console.log("");
-  return { fetchEnabled: true };
+  return { fetchEnabled: true, provider };
 }
 
 /**
@@ -1703,6 +1790,11 @@ function patchStagedDockerfile(
   dockerfile = dockerfile.replace(
     /^ARG NEMOCLAW_WEB_SEARCH_ENABLED=.*$/m,
     `ARG NEMOCLAW_WEB_SEARCH_ENABLED=${webSearchConfig ? "1" : "0"}`,
+  );
+  const webSearchProvider = webSearchConfig?.provider === "tavily" ? "tavily" : "brave";
+  dockerfile = dockerfile.replace(
+    /^ARG NEMOCLAW_WEB_SEARCH_PROVIDER=.*$/m,
+    `ARG NEMOCLAW_WEB_SEARCH_PROVIDER=${webSearchProvider}`,
   );
   // Onboard flow expects immediate dashboard access without device pairing,
   // so disable device auth for images built during onboard (see #1217).
@@ -3520,10 +3612,12 @@ async function createSandbox(
     .filter(({ envKey }) => !disabledEnvKeys.has(envKey));
 
   if (webSearchConfig) {
+    const wsEnvKey = webSearch.webSearchEnvFor(webSearchConfig.provider || "brave");
+    const wsProviderName = webSearchConfig.provider === "tavily" ? "tavily" : "brave";
     messagingTokenDefs.push({
-      name: `${sandboxName}-brave-search`,
-      envKey: webSearch.BRAVE_API_KEY_ENV,
-      token: getCredential(webSearch.BRAVE_API_KEY_ENV),
+      name: `${sandboxName}-${wsProviderName}-search`,
+      envKey: wsEnvKey,
+      token: getCredential(wsEnvKey),
     });
   }
   const hasMessagingTokens = messagingTokenDefs.some(({ token }) => !!token);
@@ -3816,12 +3910,17 @@ async function createSandbox(
   }
 
   console.log(`  Creating sandbox '${sandboxName}' (this takes a few minutes on first run)...`);
-  if (webSearchConfig && !getCredential(webSearch.BRAVE_API_KEY_ENV)) {
-    console.error("  Brave Search is enabled, but BRAVE_API_KEY is not available in this process.");
-    console.error(
-      "  Re-run with BRAVE_API_KEY set, or disable Brave Search before recreating the sandbox.",
-    );
-    process.exit(1);
+  if (webSearchConfig) {
+    const wsEnvKey = webSearch.webSearchEnvFor(webSearchConfig.provider || "brave");
+    if (!getCredential(wsEnvKey)) {
+      console.error(
+        `  Web search is enabled, but ${wsEnvKey} is not available in this process.`,
+      );
+      console.error(
+        `  Re-run with ${wsEnvKey} set, or disable web search before recreating the sandbox.`,
+      );
+      process.exit(1);
+    }
   }
   const tokensByEnvKey = Object.fromEntries(
     messagingTokenDefs.map(({ envKey, token }) => [envKey, token]),
@@ -3973,10 +4072,10 @@ async function createSandbox(
     envArgs.push(formatEnvAssignment("NEMOCLAW_PROXY_PORT", sandboxProxyPort));
   }
   if (webSearchConfig?.fetchEnabled) {
-    const braveKey =
-      getCredential(webSearch.BRAVE_API_KEY_ENV) || process.env[webSearch.BRAVE_API_KEY_ENV];
-    if (braveKey) {
-      envArgs.push(formatEnvAssignment(webSearch.BRAVE_API_KEY_ENV, braveKey));
+    const wsEnvKey = webSearch.webSearchEnvFor(webSearchConfig.provider || "brave");
+    const wsKey = getCredential(wsEnvKey) || process.env[wsEnvKey];
+    if (wsKey) {
+      envArgs.push(formatEnvAssignment(wsEnvKey, wsKey));
     }
   }
   // Slack Socket Mode requires both tokens in the container env so the baked
@@ -5589,7 +5688,9 @@ function getSuggestedPolicyPresets({
   maybeSuggestMessagingPreset("slack", "SLACK_BOT_TOKEN");
   maybeSuggestMessagingPreset("discord", "DISCORD_BOT_TOKEN");
 
-  if (webSearchConfig) suggestions.push("brave");
+  if (webSearchConfig) {
+    suggestions.push(webSearchConfig.provider === "tavily" ? "tavily" : "brave");
+  }
 
   return suggestions;
 }
@@ -6239,7 +6340,9 @@ function computeSetupPresetSuggestions(
     if (known && !known.has(name)) return;
     suggestions.push(name);
   };
-  if (webSearchConfig) add("brave");
+  if (webSearchConfig) {
+    add(webSearchConfig.provider === "tavily" ? "tavily" : "brave");
+  }
   if (provider && LOCAL_INFERENCE_PROVIDERS.includes(provider)) add("local-inference");
   if (Array.isArray(enabledChannels)) {
     for (const channel of enabledChannels) add(channel);
@@ -7455,8 +7558,38 @@ async function onboard(opts: OnboardOptions = {}): Promise<void> {
       });
     }
 
+    if (webSearchConfig) {
+      const webSearchProvider =
+        webSearchConfig.provider === "tavily" ? "tavily" : "brave";
+      const spec = getWebSearchProviderSpec(webSearchProvider);
+      note(`  [resume] Revalidating ${spec.label} configuration.`);
+      const apiKey = await ensureValidatedWebSearchCredential(spec);
+      if (apiKey) {
+        webSearchConfig = { fetchEnabled: true, provider: webSearchProvider };
+        onboardSession.updateSession((current) => {
+          current.webSearchConfig = webSearchConfig;
+          return current;
+        });
+        note(`  [resume] Reusing ${spec.label} configuration.`);
+      } else {
+        webSearchConfig = await configureWebSearch(null, agent, webSearchSupportProbePath);
+        onboardSession.updateSession((current) => {
+          current.webSearchConfig = webSearchConfig;
+          return current;
+        });
+      }
+    } else {
+      webSearchConfig = await configureWebSearch(webSearchConfig, agent, webSearchSupportProbePath);
+      onboardSession.updateSession((current) => {
+        current.webSearchConfig = webSearchConfig;
+        return current;
+      });
+    }
     const sandboxReuseState = getSandboxReuseState(sandboxName);
-    const webSearchConfigChanged = Boolean(session?.webSearchConfig) !== Boolean(webSearchConfig);
+    const priorWebSearch = session?.webSearchConfig || null;
+    const priorWsProvider = priorWebSearch?.provider === "tavily" ? "tavily" : priorWebSearch ? "brave" : null;
+    const nextWsProvider = webSearchConfig?.provider === "tavily" ? "tavily" : webSearchConfig ? "brave" : null;
+    const webSearchConfigChanged = priorWsProvider !== nextWsProvider;
     const resumeSandbox =
       resume &&
       !webSearchConfigChanged &&
@@ -7464,7 +7597,10 @@ async function onboard(opts: OnboardOptions = {}): Promise<void> {
       sandboxReuseState === "ready";
     if (resumeSandbox) {
       if (webSearchConfig) {
-        note("  [resume] Reusing Brave Search configuration already baked into the sandbox.");
+        const spec = getWebSearchProviderSpec(
+          webSearchConfig.provider === "tavily" ? "tavily" : "brave",
+        );
+        note(`  [resume] Reusing ${spec.label} configuration already baked into the sandbox.`);
       }
       selectedMessagingChannels = session?.messagingChannels ?? [];
       skippedStepMessage("sandbox", sandboxName);
@@ -7489,11 +7625,14 @@ async function onboard(opts: OnboardOptions = {}): Promise<void> {
       }
       let nextWebSearchConfig = webSearchConfig;
       if (nextWebSearchConfig) {
-        note("  [resume] Revalidating Brave Search configuration for sandbox recreation.");
-        const braveApiKey = await ensureValidatedBraveSearchCredential();
-        nextWebSearchConfig = braveApiKey ? { fetchEnabled: true } : null;
+        const webSearchProvider =
+          nextWebSearchConfig.provider === "tavily" ? "tavily" : "brave";
+        const spec = getWebSearchProviderSpec(webSearchProvider);
+        note(`  [resume] Revalidating ${spec.label} configuration for sandbox recreation.`);
+        const apiKey = await ensureValidatedWebSearchCredential(spec);
+        nextWebSearchConfig = apiKey ? { fetchEnabled: true, provider: webSearchProvider } : null;
         if (nextWebSearchConfig) {
-          note("  [resume] Reusing Brave Search configuration.");
+          note(`  [resume] Reusing ${spec.label} configuration.`);
         }
       } else {
         nextWebSearchConfig = await configureWebSearch(null, agent, webSearchSupportProbePath);
@@ -7678,6 +7817,7 @@ module.exports = {
   classifySandboxCreateFailure,
   configureWebSearch,
   createSandbox,
+  ensureValidatedWebSearchCredential,
   ensureValidatedBraveSearchCredential,
   formatEnvAssignment,
   getFutureShellPathHint,

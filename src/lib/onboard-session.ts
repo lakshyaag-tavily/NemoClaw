@@ -206,7 +206,9 @@ function readStepStatus(value: SessionJsonValue | undefined): StepStatus | null 
 }
 
 function parseWebSearchConfig(value: SessionJsonValue | undefined): WebSearchConfig | null {
-  return isObject(value) && value.fetchEnabled === true ? { fetchEnabled: true } : null;
+  if (!isObject(value) || value.fetchEnabled !== true) return null;
+  const provider = value.provider === "tavily" ? "tavily" : "brave";
+  return { fetchEnabled: true, provider };
 }
 
 function parseSessionMetadata(value: SessionJsonValue | undefined): SessionMetadata | undefined {
@@ -282,7 +284,12 @@ export function createSession(overrides: Partial<Session> = {}): Session {
     preferredInferenceApi: overrides.preferredInferenceApi ?? null,
     nimContainer: overrides.nimContainer ?? null,
     webSearchConfig:
-      overrides.webSearchConfig?.fetchEnabled === true ? { fetchEnabled: true } : null,
+      overrides.webSearchConfig?.fetchEnabled === true
+        ? {
+            fetchEnabled: true,
+            provider: overrides.webSearchConfig.provider === "tavily" ? "tavily" : "brave",
+          }
+        : null,
     policyPresets: readStringArray(overrides.policyPresets),
     messagingChannels: readStringArray(overrides.messagingChannels),
     migratedLegacyValueHashes: overrides.migratedLegacyValueHashes
@@ -616,7 +623,10 @@ export function filterSafeUpdates(updates: SessionUpdates): Partial<Session> {
     safe.preferredInferenceApi = updates.preferredInferenceApi;
   if (typeof updates.nimContainer === "string") safe.nimContainer = updates.nimContainer;
   if (isObject(updates.webSearchConfig) && updates.webSearchConfig.fetchEnabled === true) {
-    safe.webSearchConfig = { fetchEnabled: true };
+    safe.webSearchConfig = {
+      fetchEnabled: true,
+      provider: updates.webSearchConfig.provider === "tavily" ? "tavily" : "brave",
+    };
   } else if (updates.webSearchConfig === null) {
     safe.webSearchConfig = null;
   }

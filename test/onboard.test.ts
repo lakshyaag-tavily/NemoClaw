@@ -301,7 +301,7 @@ describe("onboard helpers", () => {
         enabledChannels: [],
         knownPresetNames: known,
       });
-      expect(suggestions).toEqual(["npm", "pypi", "huggingface", "brew", "brave"]);
+      expect(suggestions).toEqual(["npm", "pypi", "huggingface", "brew", "brave", "tavily"]);
     });
 
     it("forwards enabled messaging channels into the balanced tier suggestions", () => {
@@ -1000,6 +1000,7 @@ describe("onboard helpers", () => {
         "ARG NEMOCLAW_INFERENCE_API=openai-completions",
         "ARG NEMOCLAW_INFERENCE_COMPAT_B64=e30=",
         "ARG NEMOCLAW_WEB_SEARCH_ENABLED=0",
+        "ARG NEMOCLAW_WEB_SEARCH_PROVIDER=brave",
         "ARG NEMOCLAW_BUILD_ID=default",
       ].join("\n"),
     );
@@ -1014,10 +1015,11 @@ describe("onboard helpers", () => {
         "build-web",
         "openai-api",
         null,
-        { fetchEnabled: true },
+        { fetchEnabled: true, provider: "brave" },
       );
       const patched = fs.readFileSync(dockerfilePath, "utf8");
       assert.match(patched, /^ARG NEMOCLAW_WEB_SEARCH_ENABLED=1$/m);
+      assert.match(patched, /^ARG NEMOCLAW_WEB_SEARCH_PROVIDER=brave$/m);
       // Regression guard: the old secret-bearing build arg must not reappear.
       assert.doesNotMatch(patched, /NEMOCLAW_WEB_CONFIG_B64/);
     } finally {
@@ -1120,6 +1122,50 @@ const { loadAgent } = require(${agentDefsPath});
       assert.equal(payload.result, null);
       assert.equal(payload.promptCalls, 0);
     } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("patches the staged Dockerfile with Tavily Search config when selected", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nemoclaw-onboard-dockerfile-tavily-"));
+    const dockerfilePath = path.join(tmpDir, "Dockerfile");
+    fs.writeFileSync(
+      dockerfilePath,
+      [
+        "ARG NEMOCLAW_MODEL=nvidia/nemotron-3-super-120b-a12b",
+        "ARG NEMOCLAW_PROVIDER_KEY=nvidia",
+        "ARG NEMOCLAW_PRIMARY_MODEL_REF=nvidia/nemotron-3-super-120b-a12b",
+        "ARG CHAT_UI_URL=http://127.0.0.1:18789",
+        "ARG NEMOCLAW_INFERENCE_BASE_URL=https://inference.local/v1",
+        "ARG NEMOCLAW_INFERENCE_API=openai-completions",
+        "ARG NEMOCLAW_INFERENCE_COMPAT_B64=e30=",
+        "ARG NEMOCLAW_WEB_SEARCH_ENABLED=0",
+        "ARG NEMOCLAW_WEB_SEARCH_PROVIDER=brave",
+        "ARG NEMOCLAW_BUILD_ID=default",
+      ].join("\n"),
+    );
+
+    const priorTavilyKey = process.env.TAVILY_API_KEY;
+    process.env.TAVILY_API_KEY = "tvly-test-key";
+    try {
+      patchStagedDockerfile(
+        dockerfilePath,
+        "gpt-5.4",
+        "http://127.0.0.1:18789",
+        "build-web",
+        "openai-api",
+        null,
+        { fetchEnabled: true, provider: "tavily" },
+      );
+      const patched = fs.readFileSync(dockerfilePath, "utf8");
+      assert.match(patched, /^ARG NEMOCLAW_WEB_SEARCH_ENABLED=1$/m);
+      assert.match(patched, /^ARG NEMOCLAW_WEB_SEARCH_PROVIDER=tavily$/m);
+    } finally {
+      if (priorTavilyKey === undefined) {
+        delete process.env.TAVILY_API_KEY;
+      } else {
+        process.env.TAVILY_API_KEY = priorTavilyKey;
+      }
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });

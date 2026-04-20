@@ -216,12 +216,18 @@ def build_config(env: dict | None = None) -> dict:
     }
 
     if env.get("NEMOCLAW_WEB_SEARCH_ENABLED", "") == "1":
+        _ws_provider = env.get("NEMOCLAW_WEB_SEARCH_PROVIDER", "brave")
+        if _ws_provider not in ("brave", "tavily"):
+            _ws_provider = "brave"
+        _ws_env_key = {"brave": "BRAVE_API_KEY", "tavily": "TAVILY_API_KEY"}[
+            _ws_provider
+        ]
         config["tools"] = {
             "web": {
                 "search": {
                     "enabled": True,
-                    "provider": "brave",
-                    "apiKey": "openshell:resolve:env:BRAVE_API_KEY",
+                    "provider": _ws_provider,
+                    "apiKey": f"openshell:resolve:env:{_ws_env_key}",
                 },
                 "fetch": {"enabled": True},
             }
