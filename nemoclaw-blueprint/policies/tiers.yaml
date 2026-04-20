@@ -26,6 +26,7 @@ tiers:
       - { name: huggingface,  access: read-write }
       - { name: brew,         access: read-write }
       - { name: brave,        access: read-write }
+      - { name: tavily,       access: read-write }
 
   - name: open
     label: Open
@@ -36,6 +37,7 @@ tiers:
       - { name: huggingface,  access: read-write }
       - { name: brew,         access: read-write }
       - { name: brave,        access: read-write }
+      - { name: tavily,       access: read-write }
       - { name: slack,        access: read-write }
       - { name: discord,      access: read-write }
       - { name: telegram,     access: read-write }
