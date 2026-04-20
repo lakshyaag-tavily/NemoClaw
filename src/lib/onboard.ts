@@ -1935,8 +1935,12 @@ function resolveNonInteractiveWebSearchProvider(): WebSearchProvider | null {
   // Brave wins when both keys are present — preserves OpenClaw auto-detect
   // precedence and avoids silently flipping a user's runtime provider on
   // upgrade. Tavily is only auto-selected when it's the only key set.
-  const braveKey = normalizeCredentialValue(process.env[webSearch.BRAVE_API_KEY_ENV]);
-  const tavilyKey = normalizeCredentialValue(process.env[webSearch.TAVILY_API_KEY_ENV]);
+  const braveKey = normalizeCredentialValue(
+    getCredential(webSearch.BRAVE_API_KEY_ENV) || process.env[webSearch.BRAVE_API_KEY_ENV],
+  );
+  const tavilyKey = normalizeCredentialValue(
+    getCredential(webSearch.TAVILY_API_KEY_ENV) || process.env[webSearch.TAVILY_API_KEY_ENV],
+  );
   if (braveKey) return "brave";
   if (tavilyKey) return "tavily";
   return null;
@@ -1981,7 +1985,8 @@ async function configureWebSearch(
       return null;
     }
     const spec = getWebSearchProviderSpec(provider);
-    const apiKey = normalizeCredentialValue(process.env[spec.envKey]);
+    const apiKey =
+      getCredential(spec.envKey) || normalizeCredentialValue(process.env[spec.envKey]);
     note(`  [non-interactive] ${spec.label} requested.`);
     const validation = spec.validate(apiKey);
     if (!validation.ok) {
