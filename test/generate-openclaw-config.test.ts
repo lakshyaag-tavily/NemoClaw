@@ -153,6 +153,24 @@ describe("generate-openclaw-config.py: config generation", () => {
     expect(config.tools?.web).toBeUndefined();
   });
 
+  it("routes web_fetch through Tavily when Tavily is the search provider", () => {
+    const config = runConfigScript({
+      NEMOCLAW_WEB_SEARCH_ENABLED: "1",
+      NEMOCLAW_WEB_SEARCH_PROVIDER: "tavily",
+    });
+    expect(config.tools?.web?.fetch?.enabled).toBe(true);
+    expect(config.tools?.web?.fetch?.provider).toBe("tavily");
+  });
+
+  it("omits the web_fetch provider when Brave is the search provider", () => {
+    const config = runConfigScript({
+      NEMOCLAW_WEB_SEARCH_ENABLED: "1",
+      NEMOCLAW_WEB_SEARCH_PROVIDER: "brave",
+    });
+    expect(config.tools?.web?.fetch?.enabled).toBe(true);
+    expect(config.tools?.web?.fetch?.provider).toBeUndefined();
+  });
+
   it("propagates agent timeout", () => {
     const config = runConfigScript({ NEMOCLAW_AGENT_TIMEOUT: "300" });
     expect(config.agents.defaults.timeoutSeconds).toBe(300);

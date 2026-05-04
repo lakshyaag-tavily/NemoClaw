@@ -321,6 +321,10 @@ def build_config(env: dict | None = None) -> dict:
         _ws_env_key = {"brave": "BRAVE_API_KEY", "tavily": "TAVILY_API_KEY"}[
             _ws_provider
         ]
+        # Route web_fetch through Tavily Extract when Tavily is the search provider.
+        fetch_cfg: dict = {"enabled": True}
+        if _ws_provider == "tavily":
+            fetch_cfg["provider"] = "tavily"
         config["tools"] = {
             "web": {
                 "search": {
@@ -328,7 +332,7 @@ def build_config(env: dict | None = None) -> dict:
                     "provider": _ws_provider,
                     "apiKey": f"openshell:resolve:env:{_ws_env_key}",
                 },
-                "fetch": {"enabled": True},
+                "fetch": fetch_cfg,
             }
         }
 
